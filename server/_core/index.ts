@@ -46,6 +46,9 @@ async function startServer() {
         }
       })
   );
+  // If no FRONTEND_ORIGIN is configured, allow all origins (public API mode)
+  const allowAllOrigins = allowedOrigins.size === 0;
+
   app.use((req, res, next) => {
     const requestOrigin = req.headers.origin;
     let normalizedRequestOrigin: string | undefined;
@@ -56,7 +59,7 @@ async function startServer() {
         normalizedRequestOrigin = requestOrigin.replace(/\/$/, "");
       }
     }
-    if (requestOrigin && normalizedRequestOrigin && allowedOrigins.has(normalizedRequestOrigin)) {
+    if (requestOrigin && (allowAllOrigins || (normalizedRequestOrigin && allowedOrigins.has(normalizedRequestOrigin)))) {
       res.setHeader("Access-Control-Allow-Origin", requestOrigin);
       res.setHeader("Access-Control-Allow-Credentials", "true");
       res.setHeader("Vary", "Origin");
@@ -64,6 +67,12 @@ async function startServer() {
     if (req.method === "OPTIONS") {
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
       res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+      // Also set origin header for OPTIONS preflight when allowing all
+      if (requestOrigin && allowAllOrigins) {
+        res.setHeader("Access-Control-Allow-Origin", requestOrigin);
+        res.setHeader("Access-Control-Allow-Credentials", "true");
+        res.setHeader("Vary", "Origin");
+      }
       res.status(204).end();
       return;
     }
