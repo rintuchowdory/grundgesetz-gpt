@@ -55,6 +55,36 @@ export const appRouter = router({
         }
         return article;
       }),
+
+    /**
+     * Search articles by full-text query (title, number, body)
+     */
+    search: publicProcedure
+      .input(z.object({ query: z.string().min(1) }))
+      .query(async ({ input }) => {
+        const allArticles = await getAllArticles();
+        const q = input.query.toLowerCase();
+        return allArticles.filter(a =>
+          a.number.toLowerCase().includes(q) ||
+          a.title.toLowerCase().includes(q) ||
+          a.body.toLowerCase().includes(q) ||
+          a.category.toLowerCase().includes(q)
+        );
+      }),
+
+    /**
+     * Get all unique categories with article counts
+     */
+    categories: publicProcedure.query(async () => {
+      const allArticles = await getAllArticles();
+      const categoryMap = new Map<string, number>();
+      for (const a of allArticles) {
+        categoryMap.set(a.category, (categoryMap.get(a.category) || 0) + 1);
+      }
+      return Array.from(categoryMap.entries())
+        .map(([name, count]) => ({ name, count }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }),
   }),
 
   // ===== Conversations Router =====
@@ -126,23 +156,38 @@ export const appRouter = router({
         // Fetch conversation history for context
         const conversationHistory = await getConversationMessages(input.conversationId);
 
-        // Build system prompt with article context if available
-        let systemPrompt = `Du bist GrundgesetzGPT, ein präziser KI-Assistent für das Grundgesetz der Bundesrepublik Deutschland. Du beantwortest Fragen auf Deutsch und Englisch.
+        // Build enhanced system prompt
+        let systemPrompt = `Du bist GrundgesetzGPT, ein präziser KI-Assistent für das Grundgesetz (GG) der Bundesrepublik Deutschland. Du bist ein juristischer Experte für deutsches Verfassungsrecht.
 
-Richtlinien:
-- Antworte präzise und juristisch korrekt
-- Erkläre Fachbegriffe in einfacher Sprache
-- Verweise auf BVerfG-Urteile wenn passend
-- Nutze konkrete Beispiele aus dem deutschen Alltag
-- Bei Fragen auf Englisch, antworte auf Englisch
-- Halte Antworten prägnant (max. 4 Absätze)
-- Weise auf Rechtsberatungsbedarf hin bei spezifischen Rechtsfragen`;
+## Deine Rolle
+- Du beantwortest Fragen zum Grundgesetz, zu Verfassungsrecht und zu grundlegenden Rechtsprinzipien in Deutschland
+- Du sprichst standardmäßig Deutsch, kannst aber auf Englisch antworten wenn die Frage auf Englisch gestellt wird
+- Du bist präzise, juristisch korrekt und achtest auf die exakte Artikel-Nummerierung
+
+## Verhaltensrichtlinien
+- **Präzision:** Zitiere exakte Artikel-Nummern (z.B. "Art. 1 Abs. 1 GG") und Absätze
+- **Verständlichkeit:** Erkläre juristische Fachbegriffe in verständlicher Sprache
+- **Rechtsprechung:** Verweise auf wegweisende Urteile des Bundesverfassungsgerichts (BVerfG) wenn relevant
+- **Beispiele:** Nutze konkrete Beispiele aus dem deutschen Alltag zur Veranschaulichung
+- **Eingrenzung:** Wenn eine Frage über das Grundgesetz hinausgeht (z.B. BGB, StGB), beantworte sie im Kontext des GG und weise auf das zuständige Gesetzbuch hin
+- **Keine Rechtsberatung:** Weise darauf hin, dass deine Antworten keine Rechtsberatung ersetzen und bei konkreten rechtlichen Problemen ein Anwalt konsultiert werden sollte
+- **Struktur:** Halte Antworten klar strukturiert (max. 4-5 Absätze) und verwende Markdown bei Bedarf
+- **Neutralität:** Bleibe politisch neutral und objektiv
+
+## Wichtige Verfassungsprinzipien ( stets im Kontext):
+- Menschenwürde (Art. 1) als oberstes Prinzip
+- Demokratieprinzip (Art. 20)
+- Rechtsstaatsprinzip (Art. 20 Abs. 3)
+- Sozialstaatsprinzip (Art. 20 Abs. 1)
+- Bundesstaatsprinzip (Art. 20 Abs. 1)
+- Ewigkeitsklausel (Art. 79 Abs. 3)
+- Wesensgehaltsgarantie (Art. 19 Abs. 2)`;
 
         // Add article context if available
         if (input.articleId) {
           const article = await getArticleById(input.articleId);
           if (article) {
-            systemPrompt += `\n\nAktuell diskutierter Artikel: ${article.number} — ${article.title}\nKategorie: ${article.category}\nInhalt:\n${article.body}`;
+            systemPrompt += `\n\n--- AKUELLER KONTEXT ---\nAktuell diskutierter Artikel: ${article.number} — ${article.title}\nKategorie: ${article.category}\n\nArtikeltext:\n${article.body}\n\nBitte beziehe dich in deiner Antwort auf diesen Artikel und seinen verfassungsrechtlichen Kontext.`;
           }
         }
 
