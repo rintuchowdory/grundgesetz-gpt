@@ -1,13 +1,14 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
+import { AIChatBox, type Message } from "@/components/AIChatBox";
 import { getLoginUrl, apiBaseUrl, isOAuthConfigured } from "@/const";
 import { STATIC_ARTICLES } from "@/data/articles";
-import { Menu, X, MessageSquare, BookOpen, Plus, Clock } from "lucide-react";
+import { Menu, X, MessageSquare, BookOpen, Plus, Clock, Sparkles, AlertCircle } from "lucide-react";
 
 type SidebarTab = "articles" | "history";
 
@@ -26,13 +27,15 @@ export default function GrundgesetzApp() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("articles");
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [chatMessages, setChatMessages] = useState<Message[]>([]);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [sessionId] = useState(() => Math.random().toString(36).substring(2, 15));
 
-  // Fetch all articles — no auth required (publicProcedure)
+  // Fetch all articles — no auth required
   const { data: apiArticles, isLoading: articlesLoading } = trpc.articles.list.useQuery(undefined, {
     enabled: true,
   });
 
-  // Use API articles if available, otherwise fall back to static data
   const articles: Article[] = useMemo(() => {
     if (apiArticles && apiArticles.length > 0) return apiArticles as Article[];
     return STATIC_ARTICLES;
@@ -46,6 +49,20 @@ export default function GrundgesetzApp() {
     enabled: isAuthenticated,
   });
 
+  // Chat mutation — public, works without auth
+  const askMutation = trpc.chat.ask.useMutation({
+    onSuccess: (data) => {
+      setChatMessages(prev => [...prev, { role: "assistant", content: data.response }]);
+      setChatError(null);
+    },
+    onError: (error) => {
+      setChatError(error.message || "KI-Antwort fehlgeschlagen");
+      setChatMessages(prev => prev.filter(msg => msg.role !== "user" || msg.content !== pendingMessage));
+    },
+  });
+
+  const [pendingMessage, setPendingMessage] = useState("");
+
   // Get unique categories
   const categories = useMemo(() => {
     const cats = new Set(articles.map((a: Article) => a.category));
@@ -58,7 +75,7 @@ export default function GrundgesetzApp() {
     [articles, selectedArticleId]
   );
 
-  // Filter articles by search and category
+  // Filter articles
   const filteredArticles = useMemo(() => {
     let result = articles;
     if (activeCategory) {
@@ -75,7 +92,7 @@ export default function GrundgesetzApp() {
     return result;
   }, [articles, searchQuery, activeCategory]);
 
-  // Generate suggested questions for current article
+  // Suggested questions
   const suggestedQuestions = useMemo(() => {
     if (!selectedArticle) return [];
     return [
@@ -85,7 +102,26 @@ export default function GrundgesetzApp() {
     ];
   }, [selectedArticle]);
 
-  // Only show loading spinner when OAuth is configured (auth might actually resolve)
+  // Handle sending a chat message
+  const handleSendMessage = useCallback((content: string) => {
+    setChatError(null);
+    setPendingMessage(content);
+    setChatMessages(prev => [...prev, { role: "user", content }]);
+    askMutation.mutate({
+      message: content,
+      articleId: selectedArticle?.id,
+      sessionId,
+    });
+  }, [askMutation, selectedArticle, sessionId]);
+
+  // Reset chat when article changes
+  const handleArticleSelect = (id: number) => {
+    setSelectedArticleId(id);
+    setChatMessages([]);
+    setChatError(null);
+    if (window.innerWidth < 768) setSidebarOpen(false);
+  };
+
   if (authLoading && isOAuthConfigured) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
@@ -140,7 +176,10 @@ export default function GrundgesetzApp() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => setSidebarTab("articles")}
+              onClick={() => {
+                setChatMessages([]);
+                setSidebarTab("articles");
+              }}
               className="text-gold hover:text-gold-light hover:bg-ink/50 text-xs font-mono"
             >
               <Plus size={16} className="mr-1" />
@@ -251,10 +290,7 @@ export default function GrundgesetzApp() {
                     {filteredArticles.map((article: Article) => (
                       <button
                         key={article.id}
-                        onClick={() => {
-                          setSelectedArticleId(article.id);
-                          if (window.innerWidth < 768) setSidebarOpen(false);
-                        }}
+                        onClick={() => handleArticleSelect(article.id)}
                         className={`w-full text-left p-4 transition-colors hover:bg-ink/50 ${
                           selectedArticleId === article.id ? "bg-ink/40 border-l-4 border-gold" : "border-l-4 border-transparent"
                         }`}
@@ -328,41 +364,60 @@ export default function GrundgesetzApp() {
                 </h2>
               </div>
 
-              {/* Article Body */}
-              <ScrollArea className="flex-1">
-                <div className="p-6 max-w-4xl">
-                  <div className="prose prose-lg max-w-none">
-                    <p className="text-ink leading-relaxed whitespace-pre-line text-lg">
-                      {selectedArticle.body}
-                    </p>
-                  </div>
+              {/* Content Area: Article + Chat side by side on desktop */}
+              <div className="flex-1 overflow-hidden flex flex-col lg:flex-row">
+                {/* Article Body */}
+                <ScrollArea className="flex-1 lg:w-1/2">
+                  <div className="p-6 max-w-4xl">
+                    <div className="prose prose-lg max-w-none">
+                      <p className="text-ink leading-relaxed whitespace-pre-line text-lg">
+                        {selectedArticle.body}
+                      </p>
+                    </div>
 
-                  {/* Suggested Questions */}
-                  <div className="mt-8 pt-6 border-t-2 border-ink/10">
-                    <h3 className="text-sm font-mono uppercase tracking-widest text-ink/60 mb-3">
-                      Verständnisfragen
-                    </h3>
-                    <div className="flex flex-col gap-2">
-                      {suggestedQuestions.map((q, i) => (
-                        <div
-                          key={i}
-                          className="text-sm px-4 py-2 rounded border border-ink/10 text-ink/40"
-                        >
-                          {q}
-                        </div>
-                      ))}
+                    {/* Suggested Questions */}
+                    <div className="mt-8 pt-6 border-t-2 border-ink/10">
+                      <h3 className="text-sm font-mono uppercase tracking-widest text-ink/60 mb-3 flex items-center gap-2">
+                        <Sparkles size={14} />
+                        Verständnisfragen
+                      </h3>
+                      <div className="flex flex-col gap-2">
+                        {suggestedQuestions.map((q, i) => (
+                          <button
+                            key={i}
+                            onClick={() => handleSendMessage(q)}
+                            disabled={askMutation.isPending}
+                            className="text-left text-sm px-4 py-2 rounded border border-ink/20 hover:border-red-accent hover:bg-red-accent/5 text-ink/70 transition-colors disabled:opacity-50"
+                          >
+                            {q}
+                          </button>
+                        ))}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </ScrollArea>
+                </ScrollArea>
 
-              {/* Chat Status Bar */}
-              <div className="bg-parchment-light border-t-2 border-ink/10 px-6 py-3 flex-shrink-0">
-                <p className="text-sm text-ink/40 text-center font-mono">
-                  {isOAuthConfigured
-                    ? (isAuthenticated ? "KI-Chat verfügbar" : "Anmelden, um den KI-Chat zu nutzen")
-                    : "KI-Chat erfordert zusätzliche Konfiguration (OAuth + LLM API-Key)"}
-                </p>
+                {/* Chat Panel */}
+                <div className="lg:w-1/2 border-t-2 lg:border-t-0 lg:border-l-2 border-ink/10 flex flex-col bg-parchment-light">
+                  <AIChatBox
+                    messages={chatMessages}
+                    onSendMessage={handleSendMessage}
+                    isLoading={askMutation.isPending}
+                    placeholder={`Frage zu ${selectedArticle.number} stellen…`}
+                    height="100%"
+                    emptyStateMessage={`Stelle eine Frage zu ${selectedArticle.number} — ${selectedArticle.title}`}
+                    suggestedPrompts={suggestedQuestions}
+                  />
+                  {chatError && (
+                    <div className="px-4 py-2 bg-red-50 border-t border-red-200 flex items-start gap-2">
+                      <AlertCircle size={16} className="text-red-600 shrink-0 mt-0.5" />
+                      <div className="text-xs text-red-700">
+                        <p className="font-semibold">KI-Fehler</p>
+                        <p>{chatError}</p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </div>
             </>
           ) : (
@@ -373,7 +428,7 @@ export default function GrundgesetzApp() {
                   Grundgesetz der Bundesrepublik Deutschland
                 </h2>
                 <p className="text-ink/60">
-                  Wähle einen Artikel aus der Sidebar, um den vollständigen Text zu lesen.
+                  Wähle einen Artikel aus der Sidebar, um den vollständigen Text zu lesen und Fragen zu stellen.
                 </p>
                 <p className="text-sm text-ink/40 mt-4">
                   {articles.length} Artikel verfügbar · {categories.length} Kategorien

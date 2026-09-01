@@ -15,6 +15,11 @@ import {
 import { invokeLLM } from "./_core/llm";
 import { TRPCError } from "@trpc/server";
 
+// In-memory guest chat history (no auth needed)
+// Key: session ID (random), Value: array of messages
+const guestChats = new Map<string, Array<{ role: string; content: string }>>();
+const GUEST_CHAT_LIMIT = 20; // max messages per guest session
+
 export const appRouter = router({
   system: systemRouter,
   auth: router({
@@ -130,8 +135,103 @@ export const appRouter = router({
   // ===== Chat Router =====
   chat: router({
     /**
+     * Public chat — works without login.
+     * Uses in-memory session to store conversation history per browser.
+     */
+    ask: publicProcedure
+      .input(z.object({
+        message: z.string().min(1),
+        articleId: z.number().optional(),
+        sessionId: z.string().optional(),
+      }))
+      .mutation(async ({ input }) => {
+        // Build enhanced system prompt
+        let systemPrompt = `Du bist GrundgesetzGPT, ein präziser KI-Assistent für das Grundgesetz (GG) der Bundesrepublik Deutschland. Du bist ein juristischer Experte für deutsches Verfassungsrecht.
+
+## Deine Rolle
+- Du beantwortest Fragen zum Grundgesetz, zu Verfassungsrecht und zu grundlegenden Rechtsprinzipien in Deutschland
+- Du sprichst standardmäßig Deutsch, kannst aber auf Englisch antworten wenn die Frage auf Englisch gestellt wird
+- Du bist präzise, juristisch korrekt und achtest auf die exakte Artikel-Nummerierung
+
+## Verhaltensrichtlinien
+- **Präzision:** Zitiere exakte Artikel-Nummern (z.B. "Art. 1 Abs. 1 GG") und Absätze
+- **Verständlichkeit:** Erkläre juristische Fachbegriffe in verständlicher Sprache
+- **Rechtsprechung:** Verweise auf wegweisende Urteile des Bundesverfassungsgerichts (BVerfG) wenn relevant
+- **Beispiele:** Nutze konkrete Beispiele aus dem deutschen Alltag zur Veranschaulichung
+- **Eingrenzung:** Wenn eine Frage über das Grundgesetz hinausgeht (z.B. BGB, StGB), beantworte sie im Kontext des GG und weise auf das zuständige Gesetzbuch hin
+- **Keine Rechtsberatung:** Weise darauf hin, dass deine Antworten keine Rechtsberatung ersetzen und bei konkreten rechtlichen Problemen ein Anwalt konsultiert werden sollte
+- **Struktur:** Halte Antworten klar strukturiert (max. 4-5 Absätze) und verwende Markdown bei Bedarf
+- **Neutralität:** Bleibe politisch neutral und objektiv
+
+## Wichtige Verfassungsprinzipien (stets im Kontext):
+- Menschenwürde (Art. 1) als oberstes Prinzip
+- Demokratieprinzip (Art. 20)
+- Rechtsstaatsprinzip (Art. 20 Abs. 3)
+- Sozialstaatsprinzip (Art. 20 Abs. 1)
+- Bundesstaatsprinzip (Art. 20 Abs. 1)
+- Ewigkeitsklausel (Art. 79 Abs. 3)
+- Wesensgehaltsgarantie (Art. 19 Abs. 2)`;
+
+        // Add article context if available
+        if (input.articleId) {
+          const article = await getArticleById(input.articleId);
+          if (article) {
+            systemPrompt += `\n\n--- AKTUELLER KONTEXT ---\nAktuell diskutierter Artikel: ${article.number} — ${article.title}\nKategorie: ${article.category}\n\nArtikeltext:\n${article.body}\n\nBitte beziehe dich in deiner Antwort auf diesen Artikel und seinen verfassungsrechtlichen Kontext.`;
+          }
+        }
+
+        // Get or create guest chat session
+        const sid = input.sessionId || "default";
+        let history = guestChats.get(sid) || [];
+
+        // Build messages from history + new message
+        const messages = [
+          { role: "system" as const, content: systemPrompt },
+          ...history.map(msg => ({
+            role: msg.role as "user" | "assistant",
+            content: msg.content,
+          })),
+          { role: "user" as const, content: input.message },
+        ];
+
+        try {
+          const response = await invokeLLM({
+            messages,
+          });
+
+          const aiResponseContent = response.choices?.[0]?.message?.content;
+          const aiResponse = typeof aiResponseContent === "string"
+            ? aiResponseContent
+            : "Entschuldigung, ich konnte keine Antwort generieren.";
+
+          // Store in guest history
+          history.push({ role: "user", content: input.message });
+          history.push({ role: "assistant", content: aiResponse });
+
+          // Trim to limit
+          if (history.length > GUEST_CHAT_LIMIT) {
+            history = history.slice(-GUEST_CHAT_LIMIT);
+          }
+          guestChats.set(sid, history);
+
+          return {
+            success: true,
+            response: aiResponse,
+            sessionId: sid,
+          };
+        } catch (error) {
+          console.error("[Chat] LLM call failed:", error);
+          const msg = error instanceof Error ? error.message : "Unknown error";
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `KI-Antwort fehlgeschlagen: ${msg}`,
+          });
+        }
+      }),
+
+    /**
      * Send a message and get AI response with article context
-     * Handles the full conversation flow: store user message, call LLM, store AI response
+     * Requires auth — stores in DB for conversation history
      */
     sendMessage: protectedProcedure
       .input(z.object({
@@ -174,7 +274,7 @@ export const appRouter = router({
 - **Struktur:** Halte Antworten klar strukturiert (max. 4-5 Absätze) und verwende Markdown bei Bedarf
 - **Neutralität:** Bleibe politisch neutral und objektiv
 
-## Wichtige Verfassungsprinzipien ( stets im Kontext):
+## Wichtige Verfassungsprinzipien (stets im Kontext):
 - Menschenwürde (Art. 1) als oberstes Prinzip
 - Demokratieprinzip (Art. 20)
 - Rechtsstaatsprinzip (Art. 20 Abs. 3)
@@ -187,7 +287,7 @@ export const appRouter = router({
         if (input.articleId) {
           const article = await getArticleById(input.articleId);
           if (article) {
-            systemPrompt += `\n\n--- AKUELLER KONTEXT ---\nAktuell diskutierter Artikel: ${article.number} — ${article.title}\nKategorie: ${article.category}\n\nArtikeltext:\n${article.body}\n\nBitte beziehe dich in deiner Antwort auf diesen Artikel und seinen verfassungsrechtlichen Kontext.`;
+            systemPrompt += `\n\n--- AKTUELLER KONTEXT ---\nAktuell diskutierter Artikel: ${article.number} — ${article.title}\nKategorie: ${article.category}\n\nArtikeltext:\n${article.body}\n\nBitte beziehe dich in deiner Antwort auf diesen Artikel und seinen verfassungsrechtlichen Kontext.`;
           }
         }
 
