@@ -1,12 +1,11 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useAuth } from "@/_core/hooks/useAuth";
 import { trpc } from "@/lib/trpc";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Spinner } from "@/components/ui/spinner";
-import { AIChatBox } from "@/components/AIChatBox";
-import { getLoginUrl, apiBaseUrl } from "@/const";
+import { getLoginUrl, apiBaseUrl, isOAuthConfigured } from "@/const";
 import { STATIC_ARTICLES } from "@/data/articles";
 import { Menu, X, MessageSquare, BookOpen, Plus, Clock } from "lucide-react";
 
@@ -27,7 +26,6 @@ export default function GrundgesetzApp() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>("articles");
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const [currentConversationId, setCurrentConversationId] = useState<number | null>(null);
 
   // Fetch all articles — no auth required (publicProcedure)
   const { data: apiArticles, isLoading: articlesLoading } = trpc.articles.list.useQuery(undefined, {
@@ -44,7 +42,6 @@ export default function GrundgesetzApp() {
   const isStaticMode = !hasBackend;
 
   // Fetch user conversations — auth required
-  const utils = trpc.useUtils();
   const { data: conversations = [] } = trpc.conversations.list.useQuery(undefined, {
     enabled: isAuthenticated,
   });
@@ -88,7 +85,8 @@ export default function GrundgesetzApp() {
     ];
   }, [selectedArticle]);
 
-  if (authLoading) {
+  // Only show loading spinner when OAuth is configured (auth might actually resolve)
+  if (authLoading && isOAuthConfigured) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Spinner />
@@ -96,7 +94,8 @@ export default function GrundgesetzApp() {
     );
   }
 
-  if (!isAuthenticated && !isStaticMode) {
+  // Only show login screen when OAuth is actually configured
+  if (!isAuthenticated && isOAuthConfigured) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-background px-4">
         <div className="text-center max-w-md">
@@ -141,10 +140,7 @@ export default function GrundgesetzApp() {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => {
-                setCurrentConversationId(null);
-                setSidebarTab("articles");
-              }}
+              onClick={() => setSidebarTab("articles")}
               className="text-gold hover:text-gold-light hover:bg-ink/50 text-xs font-mono"
             >
               <Plus size={16} className="mr-1" />
@@ -248,28 +244,28 @@ export default function GrundgesetzApp() {
                   </div>
                 ) : filteredArticles.length === 0 ? (
                   <div className="p-4 text-center text-parchment-light/40 text-sm">
-                    Keine Artikel gefunden
+                    Keine Artikel gefunden.
                   </div>
                 ) : (
-                  <div>
+                  <div className="divide-y divide-ink/30">
                     {filteredArticles.map((article: Article) => (
                       <button
                         key={article.id}
                         onClick={() => {
                           setSelectedArticleId(article.id);
-                          setSidebarOpen(false);
+                          if (window.innerWidth < 768) setSidebarOpen(false);
                         }}
-                        className={`w-full text-left px-4 py-3 border-b border-ink/50 transition-colors ${
-                          selectedArticle?.id === article.id
-                            ? "bg-ink/80 border-l-4 border-red-accent text-gold-light shadow-md"
-                            : "text-parchment-light hover:bg-ink/50 hover:border-l-4 hover:border-red-accent/50"
+                        className={`w-full text-left p-4 transition-colors hover:bg-ink/50 ${
+                          selectedArticleId === article.id ? "bg-ink/40 border-l-4 border-gold" : "border-l-4 border-transparent"
                         }`}
                       >
-                        <div className="text-xs font-mono text-gold mb-1">{article.number}</div>
-                        <div className="text-sm line-clamp-2">{article.title}</div>
-                        <div className="text-[10px] font-mono uppercase tracking-wider text-parchment-light/40 mt-1">
-                          {article.category}
+                        <div className="flex items-baseline gap-2 mb-1">
+                          <span className="text-gold-light font-mono font-bold text-sm">{article.number}</span>
+                          <span className="text-[10px] text-parchment-light/40 font-mono uppercase tracking-wider">
+                            {article.category}
+                          </span>
                         </div>
+                        <p className="text-sm text-parchment-light/80 line-clamp-2">{article.title}</p>
                       </button>
                     ))}
                   </div>
@@ -282,38 +278,27 @@ export default function GrundgesetzApp() {
           {sidebarTab === "history" && isAuthenticated && (
             <ScrollArea className="flex-1">
               {conversations.length === 0 ? (
-                <div className="p-6 text-center text-parchment-light/40 text-sm">
-                  <MessageSquare size={32} className="mx-auto mb-3 opacity-30" />
-                  Noch keine Gespräche vorhanden.
-                  <br />
-                  Starten Sie ein neues Gespräch!
+                <div className="p-4 text-center text-parchment-light/40 text-sm">
+                  Noch keine Konversationen.
                 </div>
               ) : (
-                <div>
-                  {conversations.map((conv: any) => (
+                <div className="divide-y divide-ink/30">
+                  {conversations.map((conv: { id: number; title: string; articleId: number | null; createdAt: Date }) => (
                     <button
                       key={conv.id}
                       onClick={() => {
-                        setCurrentConversationId(conv.id);
-                        setSidebarOpen(false);
+                        setSelectedArticleId(conv.articleId);
+                        setSidebarTab("articles");
                       }}
-                      className={`w-full text-left px-4 py-3 border-b border-ink/50 transition-colors ${
-                        currentConversationId === conv.id
-                          ? "bg-ink/80 border-l-4 border-red-accent text-gold-light shadow-md"
-                          : "text-parchment-light hover:bg-ink/50 hover:border-l-4 hover:border-red-accent/50"
-                      }`}
+                      className="w-full text-left p-4 hover:bg-ink/50 transition-colors"
                     >
                       <div className="flex items-center gap-2 mb-1">
                         <Clock size={12} className="text-gold/60" />
-                        <span className="text-xs font-mono text-gold/60">
-                          {new Date(conv.createdAt).toLocaleDateString("de-DE", {
-                            day: "2-digit",
-                            month: "2-digit",
-                            year: "numeric",
-                          })}
+                        <span className="text-[10px] text-parchment-light/40 font-mono">
+                          {new Date(conv.createdAt).toLocaleDateString('de-DE')}
                         </span>
                       </div>
-                      <div className="text-sm line-clamp-2">{conv.title}</div>
+                      <p className="text-sm text-parchment-light/80 line-clamp-1">{conv.title}</p>
                     </button>
                   ))}
                 </div>
@@ -323,212 +308,81 @@ export default function GrundgesetzApp() {
         </aside>
 
         {/* Main Content */}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {/* Article Panel */}
-          <div className="bg-gradient-to-b from-parchment-light to-parchment flex-shrink-0 overflow-y-auto max-h-64 p-6 border-b-4 border-red-accent/30 shadow-md">
-            {selectedArticle ? (
-              <div>
-                <p className="text-xs text-muted-foreground tracking-widest font-mono mb-2 uppercase">
-                  Grundgesetz für die Bundesrepublik Deutschland · 1949
-                </p>
-                <h2
-                  className="text-2xl font-bold text-ink mb-2"
-                  style={{ fontFamily: "'Playfair Display', serif" }}
-                >
-                  {selectedArticle.number} — {selectedArticle.title}
-                </h2>
-                <span className="inline-block bg-gradient-to-r from-german-red to-red-accent text-parchment-light text-xs px-4 py-2 font-mono tracking-widest mb-4 rounded shadow-md font-bold">
-                  {selectedArticle.category}
-                </span>
-                <p className="text-sm text-foreground leading-relaxed whitespace-pre-wrap">
-                  {selectedArticle.body}
-                </p>
-                <Button
-                  onClick={() => {
-                    if (isAuthenticated) {
-                      setCurrentConversationId(-1);
-                      setSidebarTab("history");
-                    } else {
-                      window.location.href = getLoginUrl();
-                    }
-                  }}
-                  className="mt-4 bg-gradient-to-r from-german-red to-red-accent text-parchment-light border-0 hover:from-red-accent hover:to-german-red shadow-md font-bold"
-                >
-                  {isAuthenticated ? "Diesen Artikel befragen →" : "Anmelden zum Chatten →"}
-                </Button>
-              </div>
-            ) : (
-              <div className="text-center text-muted-foreground">Wählen Sie einen Artikel aus</div>
-            )}
-          </div>
-
-          {/* Chat Area */}
-          <div className="flex-1 flex flex-col overflow-hidden">
-            {currentConversationId && selectedArticle && isAuthenticated ? (
-              <ChatInterface
-                key={currentConversationId}
-                conversationId={currentConversationId}
-                articleId={selectedArticle.id}
-                articleNumber={selectedArticle.number}
-                articleTitle={selectedArticle.title}
-                suggestedQuestions={suggestedQuestions}
-                onConversationCreated={(id) => {
-                  setCurrentConversationId(id);
-                  utils.conversations.list.invalidate();
-                }}
-              />
-            ) : (
-              <div className="flex-1 flex flex-col items-center justify-center bg-parchment p-6">
-                <div className="text-center max-w-md">
-                  <div className="text-6xl mb-4">⚖️</div>
-                  <h3
-                    className="text-xl font-bold text-ink mb-2"
-                    style={{ fontFamily: "'Playfair Display', serif" }}
-                  >
-                    Willkommen bei GrundgesetzGPT
-                  </h3>
-                  <p className="text-muted-foreground mb-6">
-                    {isAuthenticated
-                      ? 'Wählen Sie einen Artikel aus der Sidebar und klicken Sie auf "Diesen Artikel befragen", um das Gespräch zu starten.'
-                      : "Durchsuchen Sie alle Artikel des Grundgesetzes. Melden Sie sich an, um mit dem KI-Assistenten zu chatten."}
-                  </p>
-                  <div className="flex flex-wrap gap-2 justify-center">
-                    {categories.slice(0, 5).map((cat: string) => (
-                      <span
-                        key={cat}
-                        className="text-[10px] font-mono uppercase tracking-wider px-3 py-1.5 rounded bg-parchment-dark text-muted-foreground border border-border-muted"
-                      >
-                        {cat}
-                      </span>
-                    ))}
-                    {categories.length > 5 && (
-                      <span className="text-[10px] font-mono uppercase tracking-wider px-3 py-1.5 text-muted-foreground">
-                        +{categories.length - 5} weitere
-                      </span>
-                    )}
+        <main className="flex-1 overflow-hidden flex flex-col bg-parchment">
+          {selectedArticle ? (
+            <>
+              {/* Article Header */}
+              <div className="bg-parchment-light border-b-4 border-red-accent px-6 py-4 flex-shrink-0">
+                <div className="flex items-baseline justify-between mb-2">
+                  <div>
+                    <span className="text-3xl font-bold text-ink font-mono mr-3" style={{ fontFamily: "'Playfair Display', serif" }}>
+                      {selectedArticle.number}
+                    </span>
+                    <span className="text-[10px] text-ink/50 font-mono uppercase tracking-widest bg-ink/10 px-2 py-1 rounded">
+                      {selectedArticle.category}
+                    </span>
                   </div>
-                  {articles.length > 0 && (
-                    <p className="text-xs text-muted-foreground mt-4 font-mono">
-                      {articles.length} Artikel verfügbar
-                    </p>
-                  )}
                 </div>
+                <h2 className="text-xl text-ink font-bold" style={{ fontFamily: "'Playfair Display', serif" }}>
+                  {selectedArticle.title}
+                </h2>
               </div>
-            )}
-          </div>
+
+              {/* Article Body */}
+              <ScrollArea className="flex-1">
+                <div className="p-6 max-w-4xl">
+                  <div className="prose prose-lg max-w-none">
+                    <p className="text-ink leading-relaxed whitespace-pre-line text-lg">
+                      {selectedArticle.body}
+                    </p>
+                  </div>
+
+                  {/* Suggested Questions */}
+                  <div className="mt-8 pt-6 border-t-2 border-ink/10">
+                    <h3 className="text-sm font-mono uppercase tracking-widest text-ink/60 mb-3">
+                      Verständnisfragen
+                    </h3>
+                    <div className="flex flex-col gap-2">
+                      {suggestedQuestions.map((q, i) => (
+                        <div
+                          key={i}
+                          className="text-sm px-4 py-2 rounded border border-ink/10 text-ink/40"
+                        >
+                          {q}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </ScrollArea>
+
+              {/* Chat Status Bar */}
+              <div className="bg-parchment-light border-t-2 border-ink/10 px-6 py-3 flex-shrink-0">
+                <p className="text-sm text-ink/40 text-center font-mono">
+                  {isOAuthConfigured
+                    ? (isAuthenticated ? "KI-Chat verfügbar" : "Anmelden, um den KI-Chat zu nutzen")
+                    : "KI-Chat erfordert zusätzliche Konfiguration (OAuth + LLM API-Key)"}
+                </p>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center justify-center bg-parchment">
+              <div className="text-center max-w-md">
+                <BookOpen size={64} className="text-ink/20 mx-auto mb-4" />
+                <h2 className="text-2xl font-bold text-ink mb-2" style={{ fontFamily: "'Playfair Display', serif" }}>
+                  Grundgesetz der Bundesrepublik Deutschland
+                </h2>
+                <p className="text-ink/60">
+                  Wähle einen Artikel aus der Sidebar, um den vollständigen Text zu lesen.
+                </p>
+                <p className="text-sm text-ink/40 mt-4">
+                  {articles.length} Artikel verfügbar · {categories.length} Kategorien
+                </p>
+              </div>
+            </div>
+          )}
         </main>
       </div>
-    </div>
-  );
-}
-
-interface ChatInterfaceProps {
-  conversationId: number;
-  articleId: number;
-  articleNumber: string;
-  articleTitle: string;
-  suggestedQuestions: string[];
-  onConversationCreated: (id: number) => void;
-}
-
-function ChatInterface({
-  conversationId: initialConvId,
-  articleId,
-  articleNumber,
-  articleTitle,
-  suggestedQuestions,
-  onConversationCreated,
-}: ChatInterfaceProps) {
-  const [conversationId, setConversationId] = useState<number | null>(initialConvId === -1 ? null : initialConvId);
-  const [messages, setMessages] = useState<Array<{ role: 'user' | 'assistant' | 'system'; content: string }>>([
-    {
-      role: "assistant",
-      content: `Willkommen bei GrundgesetzGPT. Ich bin Ihr KI-Assistent für das Grundgesetz der Bundesrepublik Deutschland.\n\nWir diskutieren gerade **${articleNumber} — ${articleTitle}**. Stellen Sie mir Ihre Fragen!`,
-    },
-  ]);
-  const [isLoading, setIsLoading] = useState(false);
-  const createConvMutation = trpc.conversations.create.useMutation();
-  const sendMessageMutation = trpc.chat.sendMessage.useMutation();
-  const getMessagesQuery = trpc.conversations.getMessages.useQuery(
-    initialConvId > 0 ? initialConvId : -1,
-    { enabled: initialConvId > 0 }
-  );
-
-  // Load existing conversation messages
-  useEffect(() => {
-    if (initialConvId > 0 && getMessagesQuery.data && getMessagesQuery.data.length > 0) {
-      setMessages(getMessagesQuery.data.map((msg: any) => ({
-        role: msg.role,
-        content: msg.content,
-      })));
-    }
-  }, [initialConvId, getMessagesQuery.data]);
-
-  const handleSendMessage = async (message: string) => {
-    if (!message.trim()) return;
-
-    // Add user message to UI
-    setMessages(prev => [...prev, { role: "user", content: message }]);
-    setIsLoading(true);
-
-    try {
-      let convId = conversationId;
-
-      // Create conversation if needed
-      if (!conversationId) {
-        const conv = await createConvMutation.mutateAsync({
-          title: `Frage zu ${articleNumber}`,
-          articleId,
-        });
-        convId = conv.id;
-        setConversationId(conv.id);
-        onConversationCreated(conv.id);
-      }
-
-      if (!convId) throw new Error("Conversation ID not set");
-
-      // Send message
-      const response = await sendMessageMutation.mutateAsync({
-        conversationId: convId,
-        message,
-        articleId,
-      });
-
-      // Add AI response
-      setMessages(prev => [...prev, { role: "assistant", content: response.response }]);
-    } catch (error) {
-      console.error("Error sending message:", error);
-      setMessages(prev => [
-        ...prev,
-        { role: "assistant", content: "Entschuldigung, ein Fehler ist aufgetreten. Bitte versuchen Sie es erneut." },
-      ]);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  return (
-    <div className="flex flex-col h-full bg-parchment">
-      {/* Suggested questions */}
-      <div className="px-6 py-3 border-b-2 border-red-accent/30 bg-gradient-to-r from-parchment via-parchment to-parchment-light flex flex-wrap gap-2 shadow-sm">
-        {suggestedQuestions.map((q, i) => (
-          <button
-            key={i}
-            onClick={() => handleSendMessage(q)}
-            disabled={isLoading}
-            className="text-xs px-3 py-1 border-2 border-red-accent/50 rounded hover:bg-red-accent hover:text-parchment-light text-muted-foreground hover:border-red-accent transition-all italic font-medium disabled:opacity-50"
-          >
-            {q}
-          </button>
-        ))}
-      </div>
-      <AIChatBox
-        messages={messages}
-        onSendMessage={handleSendMessage}
-        isLoading={isLoading}
-        placeholder="Stellen Sie eine Frage zum Grundgesetz…"
-        height="100%"
-      />
     </div>
   );
 }
